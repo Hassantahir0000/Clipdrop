@@ -41,4 +41,7 @@ COPY --from=build --chown=node:node /app/.next/static ./.next/static
 
 USER node
 EXPOSE 3000
-CMD ["node", "server.js"]
+# Next's standalone server binds to $HOSTNAME. Hosts like Railway overwrite it with the
+# container's hostname at runtime, which makes the app unreachable, so force all interfaces.
+# PORT defaults to 3000 above; the host's PORT variable overrides it.
+CMD ["sh", "-c", "HOSTNAME=0.0.0.0 exec node server.js"]

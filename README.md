@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Social Video Downloader
 
-## Getting Started
+Next.js app for downloading public videos from YouTube, Instagram, Twitter / X and Facebook at the best available quality.
 
-First, run the development server:
+## Requirements
+
+- Node.js 20+
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`brew install yt-dlp`). Keep it updated (`brew upgrade yt-dlp`), since platforms change often.
+- [ffmpeg](https://ffmpeg.org/) (`brew install ffmpeg`), used to merge the best video and audio streams.
+
+## Run
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev   # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Optional env vars (put them in `.env.local`, see `.env.example`):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `NEXT_PUBLIC_GA_ID`: Google Analytics 4 measurement ID (`G-XXXXXXXXXX`). Analytics is off when it's empty.
+- `YTDLP_PATH` (default `yt-dlp`) and `MAX_CONCURRENT_DOWNLOADS` (default `3`).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Analytics events
 
-## Learn More
+GA4 automatically records page views, sessions, country/city, device, browser, OS, language, referrer/UTM source and engagement time. The app also sends these custom events:
 
-To learn more about Next.js, take a look at the following resources:
+| Event | Params |
+| --- | --- |
+| `select_platform`, `platform_auto_switch`, `paste_click` | `platform` |
+| `video_lookup` / `video_lookup_success` / `video_lookup_error` | `platform`, `video_count`, `max_quality`, `duration_sec`, `error_message` |
+| `select_quality` | `platform`, `quality` |
+| `download_start` / `download_complete` / `download_error` / `download_cancel` | `platform`, `quality`, `file_size_mb`, `wait_sec`, `error_message` |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+To use the params in GA reports, register them as custom dimensions/metrics (Admin → Custom definitions).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## How it works
 
-## Deploy on Vercel
+| Route | Purpose |
+| --- | --- |
+| `POST /api/info` | Runs `yt-dlp -J` and returns the title, thumbnail, resolution and size of the best format |
+| `GET /api/download` | Server-Sent Events stream. Downloads to a temp dir at the chosen `quality` (`best`, a resolution like `1080`, or `audio` for MP3) and reports progress |
+| `GET /api/file/[id]` | Streams the finished file to the browser once, then deletes it |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Format selection is `bv*+ba/b` sorted by resolution, then fps. YouTube then prefers H.264/AAC (`.mp4`). Other platforms prefer the highest bitrate, then H.264/AAC. YouTube 1440p/4K is only available as VP9/AV1, so those downloads come out as `.mkv`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Because this shells out to yt-dlp and writes temp files, deploy it to a Node server or container (not serverless/edge).

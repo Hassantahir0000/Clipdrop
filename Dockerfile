@@ -30,7 +30,10 @@ RUN apt-get update \
  && curl -fsSL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
  && chmod +x /usr/local/bin/yt-dlp \
  && apt-get purge -y curl && apt-get autoremove -y \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ # YouTube needs a JS runtime to unlock all formats (4K is missing without one). yt-dlp only
+ # looks for deno by default, so point it at the Node that's already in this image.
+ && printf -- '--js-runtimes node\n' > /etc/yt-dlp.conf
 
 COPY --from=build --chown=node:node /app/public ./public
 COPY --from=build --chown=node:node /app/.next/standalone ./

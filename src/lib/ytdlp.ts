@@ -9,6 +9,11 @@ import path from "node:path";
 import { detectPlatform, getPlatform, type Platform, type PlatformId } from "./platforms";
 
 const YTDLP = process.env.YTDLP_PATH || "yt-dlp";
+/**
+ * Optional proxy (e.g. http://user:pass@host:port). Platforms, especially YouTube, often answer
+ * datacenter IPs with "Sign in to confirm you're not a bot"; a residential proxy gets around that.
+ */
+const PROXY_ARGS = process.env.YTDLP_PROXY ? ["--proxy", process.env.YTDLP_PROXY] : [];
 const MAX_CONCURRENT_DOWNLOADS = Number(process.env.MAX_CONCURRENT_DOWNLOADS || 3);
 const FILE_TTL_MS = 15 * 60 * 1000;
 
@@ -91,7 +96,7 @@ export function explainError(stderr: string): string {
 
 function run(args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(/*turbopackIgnore: true*/ YTDLP, args, { signal });
+    const child = spawn(/*turbopackIgnore: true*/ YTDLP, [...PROXY_ARGS, ...args], { signal });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -314,7 +319,7 @@ export async function download(
     "--", url,
   ];
 
-  const child = spawn(/*turbopackIgnore: true*/ YTDLP, args);
+  const child = spawn(/*turbopackIgnore: true*/ YTDLP, [...PROXY_ARGS, ...args]);
   active.add(child);
   const onAbort = () => child.kill("SIGTERM");
   signal.addEventListener("abort", onAbort);

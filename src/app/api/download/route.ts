@@ -3,7 +3,8 @@ import type { NextRequest } from "next/server";
 import type { Platform } from "@/lib/platforms";
 import { download, parseQuality, UserFacingError, validateRequest, type ProgressEvent } from "@/lib/ytdlp";
 
-export const maxDuration = 900;
+// Vercel Hobby caps functions at 300s. Self-hosted (Docker) servers ignore this.
+export const maxDuration = 300;
 
 /**
  * Server-Sent Events stream: downloads the post with yt-dlp, emitting progress events,

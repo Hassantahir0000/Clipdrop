@@ -91,7 +91,7 @@ export function explainError(stderr: string): string {
 
 function run(args: string[], signal?: AbortSignal): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(YTDLP, args, { signal });
+    const child = spawn(/*turbopackIgnore: true*/ YTDLP, args, { signal });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -314,7 +314,7 @@ export async function download(
     "--", url,
   ];
 
-  const child = spawn(YTDLP, args);
+  const child = spawn(/*turbopackIgnore: true*/ YTDLP, args);
   active.add(child);
   const onAbort = () => child.kill("SIGTERM");
   signal.addEventListener("abort", onAbort);

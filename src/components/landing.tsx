@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useState, useSyncExternalStore } from "react";
 
 import { Downloader } from "@/components/downloader";
 import { PlatformIcon } from "@/components/platform-icon";
 import { track } from "@/lib/analytics";
+import { FAQ } from "@/lib/faq";
 import { getPlatform, type PlatformId } from "@/lib/platforms";
 
 type Theme = "dark" | "light";
@@ -20,26 +22,6 @@ const PLATFORM_TILES: { id: PlatformId; name: string; points: string[] }[] = [
   { id: "instagram", name: "Instagram", points: ["Reels and video posts", "Carousels: pick any video", "Original upload resolution"] },
   { id: "twitter", name: "Twitter / X", points: ["Up to 1080p", "Multi-video posts supported", "x.com and twitter.com links"] },
   { id: "facebook", name: "Facebook", points: ["Public videos and reels", "HD when the uploader provided it", "fb.watch short links work"] },
-];
-
-const FAQ = [
-  {
-    q: "Why did my private post fail?",
-    a: "We can only reach what anyone on the internet can see. Private accounts, friends-only posts and anything behind a login return an error instead of a video.",
-  },
-  {
-    q: "What quality do I get?",
-    a: "The highest the platform offers for that post by default: up to 4K at 60 fps on YouTube, usually 1080p elsewhere. You can also pick a lower resolution or audio only (MP3). The preview shows resolution, frame rate, codec and file size before you download.",
-  },
-  {
-    q: "Why is my 4K file .mkv?",
-    a: "YouTube serves 4K as VP9 or AV1 video with separate audio. We merge them into .mkv so nothing gets re-encoded and you keep full quality. VLC, IINA and most editors open it.",
-  },
-  { q: "Is it free?", a: "Yes. No account, no trial and no quality limits." },
-  {
-    q: "Is my data stored?",
-    a: "No. Files are deleted right after your download finishes, and we never ask who you are. We use Google Analytics to count visits and see which features get used.",
-  },
 ];
 
 export function Landing() {
@@ -70,12 +52,12 @@ export function Landing() {
       <div aria-hidden className="lp-glow" />
 
       <header className="lp-header">
-        <a href="#" className="lp-brand">
+        <Link href="/" className="lp-brand">
           <span aria-hidden className="lp-brand-mark">
             ↓
           </span>
           <span>Clipdrop</span>
-        </a>
+        </Link>
         <nav className="lp-nav" aria-label="Main">
           <a href="#how" className="lp-nav-link">
             How it works
@@ -178,11 +160,9 @@ export function Landing() {
                     </span>
                   </button>
                 </h3>
-                {openFaq === i && (
-                  <p id={`faq-a${i}`} className="lp-faq-a">
-                    {f.a}
-                  </p>
-                )}
+                <p id={`faq-a${i}`} className="lp-faq-a" hidden={openFaq !== i}>
+                  {f.a}
+                </p>
               </div>
             ))}
           </div>

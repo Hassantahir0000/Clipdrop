@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { PlatformIcon } from "@/components/platform-icon";
 import { track } from "@/lib/analytics";
 import { detectPlatform, PLATFORMS, type PlatformId } from "@/lib/platforms";
 import type { MediaInfo, MediaItem, ProgressEvent, Quality } from "@/lib/ytdlp";
+
+type Problem = { title: string; hint?: string };
 
 type Status =
   | { kind: "idle" }
@@ -13,9 +15,12 @@ type Status =
   | { kind: "ready"; info: MediaInfo }
   | { kind: "downloading"; info: MediaInfo; progress?: ProgressEvent }
   | { kind: "done"; info: MediaInfo; filename: string; size: number }
-  | { kind: "error"; message: string; info?: MediaInfo };
+  | { kind: "error"; problem: Problem; info?: MediaInfo };
 
-export function Downloader() {
+const VIDEO_STAGES = ["Downloading video", "Downloading audio", "Merging video and audio", "Finishing up"];
+const AUDIO_STAGES = ["Downloading audio", "Converting to MP3"];
+
+export function Downloader({ onPlatformChange }: { onPlatformChange?: (id: PlatformId) => void }) {
   const [tab, setTab] = useState<PlatformId>("youtube");
   const [url, setUrl] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -24,10 +29,18 @@ export function Downloader() {
   const [quality, setQuality] = useState<Quality>("best");
   const abortRef = useRef<AbortController | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const tabRefs = useRef<Partial<Record<PlatformId, HTMLButtonElement | null>>>({});
+  const [innerRef, height] = useAnimatedHeight();
 
   const platform = PLATFORMS.find((p) => p.id === tab)!;
   const busy = status.kind === "fetching" || status.kind === "downloading";
+  const info = "info" in status ? status.info : undefined;
+  const item = info?.items.find((i) => i.index === selected) ?? info?.items[0];
+  const showResult = status.kind === "ready" || status.kind === "done" || (status.kind === "error" && !!status.info);
+  const hasResult = showResult || status.kind === "downloading";
 
+  useEffect(() => onPlatformChange?.(tab), [tab, onPlatformChange]);
   useEffect(() => () => stopAll(), []);
 
   function stopAll() {
@@ -45,12 +58,31 @@ export function Downloader() {
     setQuality("best");
   }
 
-  function switchTab(id: PlatformId) {
+  function selectTab(id: PlatformId) {
     if (busy || id === tab) return;
     track("select_platform", { platform: id });
+    // Keep the pasted link if it already belongs to the new tab.
+    const keep = detectPlatform(url)?.id === id;
     setTab(id);
-    setUrl("");
+    if (!keep) setUrl("");
     reset();
+  }
+
+  function onTabKey(e: React.KeyboardEvent) {
+    const i = PLATFORMS.findIndex((p) => p.id === tab);
+    const moves: Record<string, number> = {
+      ArrowRight: i + 1,
+      ArrowDown: i + 1,
+      ArrowLeft: i - 1,
+      ArrowUp: i - 1,
+      Home: 0,
+      End: PLATFORMS.length - 1,
+    };
+    if (!(e.key in moves)) return;
+    e.preventDefault();
+    const next = PLATFORMS[(moves[e.key] + PLATFORMS.length) % PLATFORMS.length].id;
+    selectTab(next);
+    tabRefs.current[next]?.focus();
   }
 
   function onUrlChange(value: string) {
@@ -61,34 +93,56 @@ export function Downloader() {
       track("platform_auto_switch", { from: tab, platform: detected.id });
       setTab(detected.id);
       setNotice(`Looks like a ${detected.label} link, so we switched tabs for you.`);
-    } else {
+    } else if (!value) {
       setNotice(null);
     }
   }
 
-  async function pasteFromClipboard() {
+  async function pasteOrClear() {
+    if (url) {
+      setUrl("");
+      reset();
+      inputRef.current?.focus();
+      return;
+    }
     track("paste_click", { platform: tab });
     try {
-      onUrlChange(await navigator.clipboard.readText());
+      onUrlChange((await navigator.clipboard.readText()).trim());
     } catch {
       setNotice("Clipboard access was blocked. Paste the link with Ctrl/⌘ + V.");
+      inputRef.current?.focus();
     }
   }
 
   async function fetchInfo(e?: React.FormEvent) {
     e?.preventDefault();
-    if (!url.trim() || busy) return;
+    if (busy) return;
+    const value = url.trim();
+    if (!value) {
+      setStatus({
+        kind: "error",
+        problem: { title: "Paste a link first.", hint: `Copy the share link of a public ${platform.label} post, then paste it above.` },
+      });
+      return;
+    }
+    if (!detectPlatform(value)) {
+      setStatus({
+        kind: "error",
+        problem: { title: `That doesn't look like a ${platform.label} link.`, hint: "Check the address, or pick another platform above." },
+      });
+      return;
+    }
     stopAll();
     const controller = new AbortController();
     abortRef.current = controller;
+    setNotice(null);
     setStatus({ kind: "fetching" });
-    setSelected(1);
     track("video_lookup", { platform: tab });
     try {
       const res = await fetch("/api/info", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, platform: tab }),
+        body: JSON.stringify({ url: value, platform: tab }),
         signal: controller.signal,
       });
       const data = await res.json();
@@ -105,21 +159,20 @@ export function Downloader() {
     } catch (err) {
       if (controller.signal.aborted) return;
       const message = err instanceof Error ? err.message : "Couldn't fetch this post.";
-      setStatus({ kind: "error", message });
+      setStatus({ kind: "error", problem: explain(message) });
       track("video_lookup_error", { platform: tab, error_message: message });
     }
   }
 
-  function selectItem(item: MediaItem) {
-    setSelected(item.index);
-    setQuality(item.qualities[0]?.short ?? "best");
+  function selectItem(it: MediaItem) {
+    setSelected(it.index);
+    setQuality(it.qualities[0]?.short ?? "best");
   }
 
   function startDownload(info: MediaInfo) {
     stopAll();
-    const params = new URLSearchParams({ url, platform: tab });
+    const params = new URLSearchParams({ url: url.trim(), platform: tab, quality: String(quality) });
     if (info.items.length > 1) params.set("item", String(selected));
-    params.set("quality", String(quality));
     const source = new EventSource(`/api/download?${params}`);
     sourceRef.current = source;
     setStatus({ kind: "downloading", info });
@@ -147,15 +200,19 @@ export function Downloader() {
         a.remove();
       } else {
         source.close();
-        setStatus({ kind: "error", message: event.message, info });
+        setStatus({ kind: "error", problem: explain(event.message), info });
         track("download_error", { ...eventParams, error_message: event.message });
       }
     };
+    // Only fires for unexpected drops: we close the source ourselves on done/error/cancel.
     source.onerror = () => {
-      // Only fires for unexpected drops: we close the source ourselves on done/error/cancel.
       source.close();
       track("download_error", { ...eventParams, error_message: "connection_lost" });
-      setStatus({ kind: "error", message: "Lost connection to the server.", info });
+      setStatus({
+        kind: "error",
+        problem: { title: "Lost connection to the server.", hint: "Check your connection and try again." },
+        info,
+      });
     };
   }
 
@@ -165,317 +222,398 @@ export function Downloader() {
     setStatus((s) => (s.kind === "downloading" ? { kind: "ready", info: s.info } : s));
   }
 
-  const info = "info" in status ? status.info : undefined;
+  function newLink() {
+    setUrl("");
+    reset();
+    inputRef.current?.focus();
+  }
+
+  const panelId = "dl-panel";
+  const tabPairs = [PLATFORMS.slice(0, 2), PLATFORMS.slice(2)];
 
   return (
-    <div className="w-full max-w-2xl" style={{ "--accent": platform.accent } as React.CSSProperties}>
-      {/* Tabs */}
-      <div role="tablist" aria-label="Platform" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {PLATFORMS.map((p) => {
-          const active = p.id === tab;
-          return (
-            <button
-              key={p.id}
-              role="tab"
-              aria-selected={active}
-              disabled={busy && !active}
-              onClick={() => switchTab(p.id)}
-              style={active ? { backgroundColor: p.accent, borderColor: p.accent } : undefined}
-              className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-medium transition
-                ${active ? "text-white shadow-lg" : "border-white/10 bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white"}
-                disabled:cursor-not-allowed disabled:opacity-40`}
-            >
-              <PlatformIcon id={p.id} className="size-4" />
-              {p.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Card */}
-      <div className="mt-4 rounded-2xl border border-white/10 bg-zinc-900/70 p-5 shadow-2xl backdrop-blur sm:p-6">
-        <form onSubmit={fetchInfo} className="flex flex-col gap-3 sm:flex-row">
-          <div className="relative flex-1">
-            <input
-              type="url"
-              inputMode="url"
-              autoComplete="off"
-              spellCheck={false}
-              value={url}
-              onChange={(e) => onUrlChange(e.target.value)}
-              placeholder={platform.placeholder}
-              disabled={busy}
-              aria-label={`${platform.label} post link`}
-              className="w-full rounded-xl border border-white/10 bg-black/40 py-3 pl-4 pr-20 text-sm text-white placeholder:text-zinc-500 outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/30 disabled:opacity-60"
-            />
-            <button
-              type="button"
-              onClick={url ? () => onUrlChange("") : pasteFromClipboard}
-              disabled={busy}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2.5 py-1 text-xs font-medium text-zinc-400 hover:bg-white/10 hover:text-white disabled:opacity-40"
-            >
-              {url ? "Clear" : "Paste"}
-            </button>
+    <div className="dl">
+      <div className="dl-clip" style={{ height }}>
+        <div ref={innerRef} className="dl-inner">
+          <div role="tablist" aria-label="Platform" className="dl-tabs">
+            {tabPairs.map((pair, i) => (
+              <div key={i} role="presentation" className="dl-tab-pair">
+                {pair.map((p) => (
+                  <button
+                    key={p.id}
+                    ref={(el) => {
+                      tabRefs.current[p.id] = el;
+                    }}
+                    type="button"
+                    role="tab"
+                    id={`dl-tab-${p.id}`}
+                    aria-selected={p.id === tab}
+                    aria-controls={panelId}
+                    tabIndex={p.id === tab ? 0 : -1}
+                    disabled={busy && p.id !== tab}
+                    onClick={() => selectTab(p.id)}
+                    onKeyDown={onTabKey}
+                    className="dl-tab"
+                    style={{ "--accent": p.accent } as React.CSSProperties}
+                  >
+                    <PlatformIcon id={p.id} className="size-[18px] flex-none" />
+                    <span>{p.label}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
           </div>
-          <button
-            type="submit"
-            disabled={!url.trim() || busy}
-            className="flex items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {status.kind === "fetching" ? <Spinner /> : null}
-            {status.kind === "fetching" ? "Looking up…" : "Get video"}
-          </button>
-        </form>
 
-        {notice && <p className="mt-3 text-xs text-zinc-400">{notice}</p>}
-
-        {status.kind === "fetching" && <SkeletonPreview />}
-
-        {info && (
-          <Preview
-            info={info}
-            selected={selected}
-            onSelect={selectItem}
-            quality={quality}
-            onQualityChange={(q) => {
-              setQuality(q);
-              track("select_quality", { platform: tab, quality: String(q) });
-            }}
-            disabled={status.kind === "downloading"}
-          />
-        )}
-
-        {status.kind === "error" && (
-          <div role="alert" className="mt-5 flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-            <span aria-hidden className="mt-0.5">⚠️</span>
-            <p>{status.message}</p>
-          </div>
-        )}
-
-        {info && status.kind !== "downloading" && (
-          <div className="mt-5 flex flex-wrap gap-3">
+          <form id={panelId} role="tabpanel" aria-labelledby={`dl-tab-${tab}`} onSubmit={fetchInfo} className="dl-row" noValidate>
+            <div className="dl-field">
+              <PlatformIcon id={tab} className="size-[18px] flex-none" />
+              <input
+                ref={inputRef}
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                spellCheck={false}
+                aria-label={`${platform.label} post link`}
+                value={url}
+                placeholder={platform.placeholder}
+                onChange={(e) => onUrlChange(e.target.value)}
+                disabled={busy}
+                className="dl-input"
+              />
+              <button type="button" onClick={pasteOrClear} disabled={busy} className="dl-chip-btn">
+                {url ? "Clear" : "Paste"}
+              </button>
+            </div>
             <button
-              onClick={() => startDownload(info)}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-white transition hover:brightness-110"
+              type="submit"
+              disabled={busy}
+              aria-busy={status.kind === "fetching"}
+              className={`dl-btn dl-btn-primary dl-get ${hasResult ? "is-quiet" : ""}`}
             >
-              <DownloadIcon />
-              {status.kind === "done" ? "Download again" : downloadLabel(quality, info, selected)}
+              {status.kind === "fetching" && <span aria-hidden className="dl-spinner" />}
+              <span>{status.kind === "fetching" ? "Looking up…" : "Get video"}</span>
             </button>
-            <button
-              onClick={() => {
-                setUrl("");
-                reset();
+          </form>
+
+          {notice && (
+            <div role="status" className="dl-notice fade-in">
+              <PlatformIcon id={tab} className="size-4 flex-none" />
+              <span className="flex-1">{notice}</span>
+              <button type="button" aria-label="Dismiss" onClick={() => setNotice(null)} className="dl-dismiss">
+                ×
+              </button>
+            </div>
+          )}
+
+          {status.kind === "error" && (
+            <div role="alert" className="dl-alert fade-in">
+              <span aria-hidden className="dl-alert-icon">
+                !
+              </span>
+              <div>
+                <p className="dl-alert-title">{status.problem.title}</p>
+                {status.problem.hint && <p className="dl-alert-hint">{status.problem.hint}</p>}
+              </div>
+            </div>
+          )}
+
+          {status.kind === "fetching" && <Skeleton />}
+
+          {showResult && info && item && (
+            <Result
+              info={info}
+              item={item}
+              platform={tab}
+              onSelect={(it) => {
+                selectItem(it);
+                track("select_video", { platform: tab, video_index: it.index });
               }}
-              className="rounded-xl border border-white/10 px-5 py-3 text-sm font-medium text-zinc-300 hover:bg-white/5"
-            >
-              New link
-            </button>
-          </div>
-        )}
+              quality={quality}
+              onQuality={(q) => {
+                setQuality(q);
+                track("select_quality", { platform: tab, quality: String(q) });
+              }}
+            />
+          )}
 
-        {status.kind === "downloading" && (
-          <ProgressPanel progress={status.progress} quality={quality} onCancel={cancelDownload} />
-        )}
+          {status.kind === "downloading" && item && (
+            <>
+              <Summary item={item} platform={tab} quality={quality} />
+              <Progress progress={status.progress} audio={quality === "audio"} onCancel={cancelDownload} />
+            </>
+          )}
 
-        {status.kind === "done" && (
-          <p className="mt-4 text-center text-sm text-emerald-300">
-            ✓ Saved <span className="font-medium">{status.filename}</span> ({formatBytes(status.size)}). Check your
-            downloads folder.
+          {status.kind === "done" && (
+            <div role="status" className="dl-success fade-in">
+              <span aria-hidden className="dl-success-icon">
+                ✓
+              </span>
+              <div className="min-w-0">
+                <p className="dl-success-title">
+                  Saved <span className="mono font-medium">{status.filename}</span> ({formatBytes(status.size)}).
+                </p>
+                <p className="dl-success-hint">Check your downloads folder.</p>
+              </div>
+            </div>
+          )}
+
+          {showResult && info && (
+            <div className="dl-actions">
+              <button type="button" onClick={() => startDownload(info)} className="dl-btn dl-btn-primary">
+                <span aria-hidden>↓</span>
+                {status.kind === "done" ? "Download again" : downloadLabel(quality, item)}
+              </button>
+              <button type="button" onClick={newLink} className="dl-btn dl-btn-secondary">
+                New link
+              </button>
+            </div>
+          )}
+
+          <p className="dl-footnote">
+            <span>Public posts only</span>
+            <span aria-hidden>·</span>
+            <span>Files deleted right after download</span>
           </p>
-        )}
+        </div>
       </div>
     </div>
   );
 }
 
-function Preview({
+/** Animates the card's height between states by measuring its content. */
+function useAnimatedHeight() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | "auto">("auto");
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setHeight(el.offsetHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, height] as const;
+}
+
+function Result({
   info,
-  selected,
+  item,
+  platform,
   onSelect,
   quality,
-  onQualityChange,
-  disabled,
+  onQuality,
 }: {
   info: MediaInfo;
-  selected: number;
+  item: MediaItem;
+  platform: PlatformId;
   onSelect: (item: MediaItem) => void;
   quality: Quality;
-  onQualityChange: (q: Quality) => void;
-  disabled: boolean;
+  onQuality: (q: Quality) => void;
 }) {
-  const item = info.items.find((i) => i.index === selected) ?? info.items[0];
+  const multi = info.items.length > 1;
   return (
-    <div className="mt-5">
-      <div className="flex flex-col gap-4 sm:flex-row">
-        <Thumb item={item} className="aspect-video w-full sm:w-56" />
-        <div className="min-w-0 flex-1">
-          <h2 className="line-clamp-2 font-semibold text-white">{item.title || info.title}</h2>
-          {info.uploader && <p className="mt-1 truncate text-sm text-zinc-400">{info.uploader}</p>}
-          <div className="mt-3 flex flex-wrap gap-2">
-            {item.height && <Badge accent>{qualityLabel(item)}</Badge>}
-            {item.width && item.height && (
-              <Badge>
-                {item.width}×{item.height}
-              </Badge>
-            )}
-            {item.fps && <Badge>{Math.round(item.fps)} fps</Badge>}
-            {item.vcodec && <Badge>{item.vcodec}</Badge>}
-            {item.filesize && <Badge>≈ {formatBytes(item.filesize)}</Badge>}
+    <div className="fade-in flex flex-col gap-4">
+      {multi ? (
+        <div className="flex flex-col gap-3">
+          <div className="dl-label-row">
+            <p id="dl-multi-label" className="dl-label">
+              This post has {info.items.length} videos. Pick one
+            </p>
+            {info.uploader && <span className="dl-sublabel">{info.uploader}</span>}
           </div>
+          <div role="radiogroup" aria-labelledby="dl-multi-label" className="dl-videos">
+            {info.items.map((it, i) => {
+              const on = it.index === item.index;
+              return (
+                <button
+                  key={it.index}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  aria-label={`Video ${i + 1}${it.duration ? `, ${formatDuration(it.duration)}` : ""}`}
+                  onClick={() => onSelect(it)}
+                  className="dl-video"
+                >
+                  <Thumbnail src={it.thumbnail} />
+                  <span className="dl-video-n">{i + 1}</span>
+                  {it.duration ? <span className="dl-video-d">{formatDuration(it.duration)}</span> : null}
+                  {on && (
+                    <span aria-hidden className="dl-video-check">
+                      ✓
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <Badges item={item} />
         </div>
-      </div>
-
-      {info.items.length > 1 && (
-        <div className="mt-5">
-          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
-            This post has {info.items.length} videos. Pick one
-          </p>
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-            {info.items.map((it) => (
-              <button
-                key={it.index}
-                disabled={disabled}
-                onClick={() => onSelect(it)}
-                aria-pressed={it.index === selected}
-                className={`overflow-hidden rounded-lg border-2 transition disabled:opacity-50 ${
-                  it.index === selected ? "border-[var(--accent)]" : "border-transparent opacity-70 hover:opacity-100"
-                }`}
-              >
-                <Thumb item={it} className="aspect-video w-full" />
-              </button>
-            ))}
+      ) : (
+        <div className="dl-media">
+          <div className="dl-thumb">
+            <Thumbnail src={item.thumbnail} fallback={platform} />
+            {item.duration ? <span className="dl-duration">{formatDuration(item.duration)}</span> : null}
+          </div>
+          <div className="dl-meta">
+            <h3 className="dl-title">{item.title || info.title}</h3>
+            {info.uploader && (
+              <div className="dl-uploader">
+                <PlatformIcon id={platform} className="size-3.5 flex-none" />
+                <span>{info.uploader}</span>
+              </div>
+            )}
+            <Badges item={item} />
           </div>
         </div>
       )}
 
-      <QualityPicker item={item} value={quality} onChange={onQualityChange} disabled={disabled} />
+      <QualityPicker item={item} value={quality} onChange={onQuality} />
     </div>
   );
 }
 
-function QualityPicker({
-  item,
-  value,
-  onChange,
-  disabled,
-}: {
-  item: MediaItem;
-  value: Quality;
-  onChange: (q: Quality) => void;
-  disabled: boolean;
-}) {
-  const options: { value: Quality; label: string; hint?: string }[] = item.qualities.length
+function Badges({ item }: { item: MediaItem }) {
+  return (
+    <div className="dl-badges">
+      {item.height ? <span className="dl-badge is-solid">{qualityLabel(item)}</span> : null}
+      {item.width && item.height ? (
+        <span className="dl-badge">
+          {item.width}×{item.height}
+        </span>
+      ) : null}
+      {item.fps ? <span className="dl-badge">{Math.round(item.fps)} fps</span> : null}
+      {item.vcodec ? <span className="dl-badge">{item.vcodec}</span> : null}
+      {item.filesize ? <span className="dl-badge">≈ {formatBytes(item.filesize)}</span> : null}
+    </div>
+  );
+}
+
+function QualityPicker({ item, value, onChange }: { item: MediaItem; value: Quality; onChange: (q: Quality) => void }) {
+  const options: { value: Quality; label: string; best?: boolean; hint?: string }[] = item.qualities.length
     ? item.qualities.map((q, i) => ({
         value: q.short,
         label: shortLabel(q.short),
+        best: i === 0,
         hint:
-          [i === 0 ? "Best" : "", q.fps && q.fps > 30 ? `${Math.round(q.fps)} fps` : "", q.filesize ? `≈ ${formatBytes(q.filesize)}` : ""]
+          [q.fps && q.fps > 30 ? `${Math.round(q.fps)} fps` : "", q.filesize ? `≈ ${formatBytes(q.filesize)}` : ""]
             .filter(Boolean)
             .join(" · ") || undefined,
       }))
     : [{ value: "best", label: "Best", hint: "Highest available" }];
-  if (item.hasAudio) options.push({ value: "audio", label: "Audio only", hint: "MP3" });
+  if (item.hasAudio) options.push({ value: "audio", label: "MP3", hint: "Audio only" });
 
   return (
-    <fieldset className="mt-5" disabled={disabled}>
-      <legend className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">Quality</legend>
-      <div role="radiogroup" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {options.map((o) => {
-          const active = o.value === value;
-          return (
-            <button
-              key={String(o.value)}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              onClick={() => onChange(o.value)}
-              className={`rounded-xl border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                active
-                  ? "border-[var(--accent)] bg-[var(--accent)]/15 text-white"
-                  : "border-white/10 bg-white/5 text-zinc-300 hover:border-white/25 hover:text-white"
-              }`}
-            >
-              <span className="block text-sm font-semibold">{o.label}</span>
-              {o.hint && <span className="block truncate text-[11px] text-zinc-400">{o.hint}</span>}
-            </button>
-          );
-        })}
+    <div className="flex flex-col gap-2.5">
+      <p id="dl-quality-label" className="dl-label">
+        Quality
+      </p>
+      <div role="radiogroup" aria-labelledby="dl-quality-label" className="dl-qualities">
+        {options.map((o) => (
+          <button
+            key={String(o.value)}
+            type="button"
+            role="radio"
+            aria-checked={o.value === value}
+            onClick={() => onChange(o.value)}
+            className="dl-quality"
+          >
+            <span className="dl-quality-label">
+              {o.label}
+              {o.best && <span className="dl-quality-tag">Best</span>}
+            </span>
+            {o.hint && <span className="dl-quality-hint">{o.hint}</span>}
+          </button>
+        ))}
       </div>
-    </fieldset>
-  );
-}
-
-function Thumb({ item, className }: { item: MediaItem; className: string }) {
-  return (
-    <div className={`relative overflow-hidden rounded-xl bg-zinc-800 ${className}`}>
-      {item.thumbnail && (
-        // Remote CDNs (IG/FB) reject hotlinks with a referrer, so use a plain <img>.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={item.thumbnail}
-          alt=""
-          referrerPolicy="no-referrer"
-          className="size-full object-cover"
-          onError={(e) => (e.currentTarget.style.display = "none")}
-        />
-      )}
-      {item.duration ? (
-        <span className="absolute bottom-1.5 right-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[11px] font-medium text-white">
-          {formatDuration(item.duration)}
-        </span>
-      ) : null}
     </div>
   );
 }
 
-function ProgressPanel({
-  progress,
-  quality,
-  onCancel,
-}: {
-  progress?: ProgressEvent;
-  quality: Quality;
-  onCancel: () => void;
-}) {
-  let label = "Starting…";
+function Thumbnail({ src, fallback }: { src?: string; fallback?: PlatformId }) {
+  // Track the failing URL (not a boolean) so a new src gets a fresh attempt.
+  const [failedSrc, setFailedSrc] = useState<string>();
+  if (src && src !== failedSrc) {
+    // Remote CDNs (IG/FB) reject hotlinks with a referrer, so use a plain <img>.
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt="" referrerPolicy="no-referrer" onError={() => setFailedSrc(src)} />;
+  }
+  if (!fallback) return null;
+  return (
+    <div className="dl-thumb-fallback">
+      <PlatformIcon id={fallback} className="size-[30px] opacity-90" />
+      <span>Preview unavailable</span>
+    </div>
+  );
+}
+
+function Summary({ item, platform, quality }: { item: MediaItem; platform: PlatformId; quality: Quality }) {
+  const option = typeof quality === "number" ? item.qualities.find((q) => q.short === quality) : undefined;
+  const fps = option?.fps ?? item.fps;
+  const parts =
+    quality === "audio"
+      ? ["MP3", "Audio only"]
+      : [
+          typeof quality === "number" ? shortLabel(quality) : qualityLabel(item),
+          fps ? `${Math.round(fps)} fps` : "",
+          option?.filesize ? `≈ ${formatBytes(option.filesize)}` : "",
+        ];
+  return (
+    <div className="dl-summary fade-in">
+      <div className="dl-thumb">
+        <Thumbnail src={item.thumbnail} fallback={platform} />
+      </div>
+      <div className="dl-summary-text">
+        <span className="dl-summary-title">{item.title}</span>
+        <span className="dl-sublabel">{parts.filter(Boolean).join(" · ")}</span>
+      </div>
+    </div>
+  );
+}
+
+function Progress({ progress, audio, onCancel }: { progress?: ProgressEvent; audio: boolean; onCancel: () => void }) {
+  const stages = audio ? AUDIO_STAGES : VIDEO_STAGES;
+  let step = 0;
   let percent: number | null = null;
-  let detail = "";
+  let detail = "Connecting…";
 
   if (progress?.type === "progress") {
     if (progress.stage === "downloading") {
-      label = quality === "audio" || progress.part > 1 ? "Downloading audio" : "Downloading video";
+      step = !audio && progress.part > 1 ? 1 : 0;
       percent = progress.percent;
-      detail = [progress.speed ? `${formatBytes(progress.speed)}/s` : "", progress.eta ? `${formatDuration(progress.eta)} left` : ""]
-        .filter(Boolean)
-        .join(" · ");
-    } else if (progress.stage === "merging") {
-      label = "Merging video and audio";
-    } else if (progress.stage === "converting") {
-      label = "Converting to MP3";
+      detail =
+        [progress.speed ? `${formatBytes(progress.speed)}/s` : "", progress.eta ? `${formatDuration(progress.eta)} left` : ""]
+          .filter(Boolean)
+          .join(" · ") || "Downloading…";
     } else {
-      label = "Finishing up";
+      step = progress.stage === "converting" ? 1 : progress.stage === "merging" ? 2 : stages.length - 1;
+      detail = "Almost there…";
     }
   }
+  const label = stages[step];
 
   return (
-    <div className="mt-5 rounded-xl border border-white/10 bg-black/30 p-4">
-      <div className="flex items-center justify-between text-sm">
-        <span className="flex items-center gap-2 font-medium text-white">
-          <Spinner />
-          {label}
-          {typeof quality === "number" ? <span className="text-zinc-500">({shortLabel(quality)})</span> : null}
-        </span>
-        <span className="tabular-nums text-zinc-400">{percent !== null ? `${percent.toFixed(0)}%` : ""}</span>
+    <div role="status" aria-live="polite" className="dl-progress fade-in">
+      <div className="dl-progress-head">
+        <div className="flex flex-col gap-1">
+          <span className="text-[15px] font-semibold">{label}</span>
+          <span className="dl-sublabel">
+            Step {step + 1} of {stages.length}
+          </span>
+        </div>
+        <span className="dl-pct">{percent === null ? "—" : `${Math.floor(percent)}%`}</span>
       </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
-        <div
-          className={`h-full rounded-full bg-[var(--accent)] transition-[width] duration-300 ${percent === null ? "w-1/3 animate-pulse" : ""}`}
-          style={percent !== null ? { width: `${percent}%` } : undefined}
-        />
+      <div
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent === null ? undefined : Math.floor(percent)}
+        className="dl-bar"
+      >
+        {percent === null ? <div className="dl-bar-indet" /> : <div className="dl-bar-fill" style={{ width: `${percent}%` }} />}
       </div>
-      <div className="mt-3 flex items-center justify-between text-xs text-zinc-500">
+      <div className="dl-progress-foot">
         <span>{detail}</span>
-        <button onClick={onCancel} className="rounded-md px-2 py-1 text-zinc-400 hover:bg-white/10 hover:text-white">
+        <button type="button" onClick={onCancel} className="dl-link-btn">
           Cancel
         </button>
       </div>
@@ -483,44 +621,44 @@ function ProgressPanel({
   );
 }
 
-function SkeletonPreview() {
+function Skeleton() {
   return (
-    <div className="mt-5 flex animate-pulse flex-col gap-4 sm:flex-row">
-      <div className="aspect-video w-full rounded-xl bg-white/5 sm:w-56" />
-      <div className="flex-1 space-y-3 py-1">
-        <div className="h-4 w-4/5 rounded bg-white/5" />
-        <div className="h-3 w-1/3 rounded bg-white/5" />
-        <div className="flex gap-2 pt-2">
-          <div className="h-6 w-14 rounded-full bg-white/5" />
-          <div className="h-6 w-20 rounded-full bg-white/5" />
+    <div aria-hidden className="dl-media fade-in">
+      <div className="dl-thumb dl-shimmer" />
+      <div className="dl-meta pt-1">
+        <div className="dl-shimmer h-4 w-[92%] rounded-md" />
+        <div className="dl-shimmer h-4 w-[64%] rounded-md" />
+        <div className="dl-block mt-1 h-3 w-[38%] rounded-md" />
+        <div className="mt-2 flex gap-1.5">
+          <div className="dl-block h-[26px] w-[52px] rounded-[7px]" />
+          <div className="dl-block h-[26px] w-[84px] rounded-[7px]" />
+          <div className="dl-block h-[26px] w-[56px] rounded-[7px]" />
         </div>
       </div>
     </div>
   );
 }
 
-function Badge({ children, accent }: { children: React.ReactNode; accent?: boolean }) {
-  return (
-    <span
-      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-        accent ? "bg-[var(--accent)] text-white" : "bg-white/10 text-zinc-300"
-      }`}
-    >
-      {children}
-    </span>
-  );
+/** Adds a "what to do next" line to the server's error message. */
+function explain(message: string): Problem {
+  const m = message.toLowerCase();
+  if (m.includes("private") || m.includes("login")) {
+    return {
+      title: message,
+      hint: "Only public posts work. If the post opens in a private browser window without signing in, it will work here.",
+    };
+  }
+  if (m.includes("bot") || m.includes("rate-limit") || m.includes("busy")) {
+    return { title: message, hint: "This usually clears up within a few minutes." };
+  }
+  if (m.includes("switch to the")) return { title: message };
+  return { title: message, hint: "Check the link and try again." };
 }
 
-function Spinner() {
-  return <span aria-hidden className="size-4 animate-spin rounded-full border-2 border-current border-t-transparent" />;
-}
-
-function DownloadIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
-      <path d="M12 4v11m0 0 4.5-4.5M12 15l-4.5-4.5M5 19h14" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+function downloadLabel(quality: Quality, item?: MediaItem) {
+  if (quality === "audio") return "Download MP3";
+  if (quality === "best" || item?.qualities[0]?.short === quality) return "Download best quality";
+  return `Download ${shortLabel(quality)}`;
 }
 
 function qualityLabel(item: MediaItem) {
@@ -533,14 +671,6 @@ function shortLabel(short: number) {
   if (short >= 2160) return "4K";
   if (short >= 1440) return "1440p";
   return `${short}p`;
-}
-
-function downloadLabel(quality: Quality, info: MediaInfo, selected: number) {
-  if (quality === "audio") return "Download MP3";
-  if (quality === "best") return "Download best quality";
-  const item = info.items.find((i) => i.index === selected);
-  const best = item?.qualities[0]?.short === quality;
-  return `Download ${shortLabel(quality)}${best ? " (best)" : ""}`;
 }
 
 function formatBytes(n: number) {

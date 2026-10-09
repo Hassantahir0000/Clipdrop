@@ -5,7 +5,10 @@ export type Platform = {
   label: string;
   hosts: string[];
   placeholder: string;
+  /** Brand color for tints, rings and the progress bar. */
   accent: string;
+  /** Darker shade for filled buttons, so white text keeps AA contrast. */
+  solid: string;
 };
 
 export const PLATFORMS: Platform[] = [
@@ -13,29 +16,33 @@ export const PLATFORMS: Platform[] = [
     id: "youtube",
     label: "YouTube",
     hosts: ["youtube.com", "youtu.be", "youtube-nocookie.com"],
-    placeholder: "https://www.youtube.com/watch?v=…  or  https://youtu.be/…",
+    placeholder: "Paste a YouTube link, e.g. youtube.com/watch?v=…",
     accent: "#ff0033",
+    solid: "#d6002b",
   },
   {
     id: "instagram",
     label: "Instagram",
     hosts: ["instagram.com", "instagr.am"],
-    placeholder: "https://www.instagram.com/reel/…  or  /p/…",
+    placeholder: "Paste an Instagram link, e.g. instagram.com/reel/…",
     accent: "#e1306c",
+    solid: "#c41f5a",
   },
   {
     id: "twitter",
     label: "Twitter / X",
     hosts: ["twitter.com", "x.com"],
-    placeholder: "https://x.com/user/status/…",
+    placeholder: "Paste a post link, e.g. x.com/user/status/…",
     accent: "#1d9bf0",
+    solid: "#0b74b8",
   },
   {
     id: "facebook",
     label: "Facebook",
     hosts: ["facebook.com", "fb.watch", "fb.com"],
-    placeholder: "https://www.facebook.com/…/videos/…  or  https://fb.watch/…",
+    placeholder: "Paste a Facebook link, e.g. facebook.com/watch?v=…",
     accent: "#1877f2",
+    solid: "#1463cc",
   },
 ];
 

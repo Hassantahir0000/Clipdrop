@@ -16,17 +16,22 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Social Video Downloader",
+  title: "Clipdrop: Save public videos in the best quality",
   description: "Download public videos from YouTube, Instagram, Twitter / X and Facebook in the best quality.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col font-sans">{children}</body>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`} suppressHydrationWarning>
+      <head>
+        {/* Apply the saved theme before first paint so light-mode users don't see a dark flash. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if(localStorage.getItem("theme")==="light")document.documentElement.dataset.theme="light"}catch(e){}`,
+          }}
+        />
+      </head>
+      <body>{children}</body>
       {GA_ID && <GoogleAnalytics gaId={GA_ID} />}
     </html>
   );

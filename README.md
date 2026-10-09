@@ -1,4 +1,4 @@
-# Social Video Downloader
+# Clipdrop
 
 Next.js app for downloading public videos from YouTube, Instagram, Twitter / X and Facebook at the best available quality.
 

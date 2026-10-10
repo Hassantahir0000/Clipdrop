@@ -6,11 +6,7 @@ export const FAQ = [
   },
   {
     q: "What quality do I get?",
-    a: "The highest the platform offers for that post by default: up to 4K at 60 fps on YouTube, usually 1080p elsewhere. You can also pick a lower resolution or audio only (MP3). The preview shows resolution, frame rate, codec and file size before you download.",
-  },
-  {
-    q: "Why is my 4K file .mkv?",
-    a: "YouTube serves 4K as VP9 or AV1 video with separate audio. We merge them into .mkv so nothing gets re-encoded and you keep full quality. VLC, IINA and most editors open it.",
+    a: "The highest the platform offers for that post by default: usually up to 1080p. You can also pick a lower resolution or audio only (MP3). The preview shows resolution, frame rate, codec and file size before you download.",
   },
   { q: "Is it free?", a: "Yes. No account, no trial and no quality limits." },
   {

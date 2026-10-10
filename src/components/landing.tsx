@@ -7,7 +7,7 @@ import { Downloader } from "@/components/downloader";
 import { PlatformIcon } from "@/components/platform-icon";
 import { track } from "@/lib/analytics";
 import { FAQ } from "@/lib/faq";
-import { getPlatform, type PlatformId } from "@/lib/platforms";
+import { getPlatform, PLATFORMS, type PlatformId } from "@/lib/platforms";
 
 type Theme = "dark" | "light";
 
@@ -18,7 +18,6 @@ const STEPS = [
 ];
 
 const PLATFORM_TILES: { id: PlatformId; name: string; points: string[] }[] = [
-  { id: "youtube", name: "YouTube", points: ["Up to 4K at 60 fps", "Videos and Shorts", "Video and audio merged for you"] },
   { id: "instagram", name: "Instagram", points: ["Reels and video posts", "Carousels: pick any video", "Original upload resolution"] },
   { id: "twitter", name: "Twitter / X", points: ["Up to 1080p", "Multi-video posts supported", "x.com and twitter.com links"] },
   { id: "facebook", name: "Facebook", points: ["Public videos and reels", "HD when the uploader provided it", "fb.watch short links work"] },
@@ -26,7 +25,7 @@ const PLATFORM_TILES: { id: PlatformId; name: string; points: string[] }[] = [
 
 export function Landing() {
   const theme = useTheme();
-  const [platform, setPlatform] = useState<PlatformId>("youtube");
+  const [platform, setPlatform] = useState<PlatformId>(PLATFORMS[0].id);
   const [openFaq, setOpenFaq] = useState(0);
   const accent = getPlatform(platform)!;
 
@@ -84,11 +83,11 @@ export function Landing() {
             <span aria-hidden>·</span>
             <span>No sign-up</span>
             <span aria-hidden>·</span>
-            <span>YouTube, Instagram, X, Facebook</span>
+            <span>Instagram, X, Facebook</span>
           </p>
           <h1 className="lp-h1">Save public videos in the best quality available.</h1>
           <p className="lp-lede">
-            Paste a link and get the highest resolution the post offers, up to 4K. No account, nothing to install.
+            Paste a link and get the highest resolution the post offers. No account, nothing to install.
           </p>
           <div className="lp-card-slot">
             <Downloader onPlatformChange={onPlatformChange} />
@@ -114,7 +113,7 @@ export function Landing() {
         <section id="platforms" aria-labelledby="pl-h" className="lp-section">
           <p className="lp-eyebrow">Supported platforms</p>
           <h2 id="pl-h" className="lp-h2">
-            Four platforms, full quality.
+            Three platforms, full quality.
           </h2>
           <div className="lp-grid">
             {PLATFORM_TILES.map((t) => (
@@ -174,7 +173,7 @@ export function Landing() {
           <span className="text-sm font-semibold">Clipdrop</span>
           <p>
             Only download videos you have the right to use. Respect creators&apos; rights and each platform&apos;s terms of
-            service. Not affiliated with YouTube, Instagram, X or Facebook.
+            service. Not affiliated with Instagram, X or Facebook.
           </p>
         </div>
       </footer>

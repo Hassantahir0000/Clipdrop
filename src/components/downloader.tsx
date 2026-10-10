@@ -21,7 +21,7 @@ const VIDEO_STAGES = ["Downloading video", "Downloading audio", "Merging video a
 const AUDIO_STAGES = ["Downloading audio", "Converting to MP3"];
 
 export function Downloader({ onPlatformChange }: { onPlatformChange?: (id: PlatformId) => void }) {
-  const [tab, setTab] = useState<PlatformId>("youtube");
+  const [tab, setTab] = useState<PlatformId>(PLATFORMS[0].id);
   const [url, setUrl] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -229,7 +229,7 @@ export function Downloader({ onPlatformChange }: { onPlatformChange?: (id: Platf
   }
 
   const panelId = "dl-panel";
-  const tabPairs = [PLATFORMS.slice(0, 2), PLATFORMS.slice(2)];
+  const tabPairs = PLATFORMS.length > 3 ? [PLATFORMS.slice(0, 2), PLATFORMS.slice(2)] : [PLATFORMS];
 
   return (
     <div className="dl">

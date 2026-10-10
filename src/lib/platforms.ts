@@ -11,7 +11,7 @@ export type Platform = {
   solid: string;
 };
 
-export const PLATFORMS: Platform[] = [
+const ALL_PLATFORMS: Platform[] = [
   {
     id: "youtube",
     label: "YouTube",
@@ -45,6 +45,11 @@ export const PLATFORMS: Platform[] = [
     solid: "#1463cc",
   },
 ];
+
+/** Platforms switched off for now: no tab, no tile, and their links aren't accepted. */
+const HIDDEN: PlatformId[] = ["youtube"];
+
+export const PLATFORMS = ALL_PLATFORMS.filter((p) => !HIDDEN.includes(p.id));
 
 export function getPlatform(id: string | null | undefined): Platform | undefined {
   return PLATFORMS.find((p) => p.id === id);
